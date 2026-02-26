@@ -18,7 +18,9 @@ pub struct TheSportsDB {
 impl TheSportsDB {
     pub fn new(api_key: Option<&str>, base_url: Option<&str>) -> Result<Self> {
         let http = Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(3))
+            .connect_timeout(std::time::Duration::from_secs(2))
+            .pool_idle_timeout(std::time::Duration::from_secs(60))
             .build()
             .context("Failed to build HTTP client")?;
         Ok(TheSportsDB {

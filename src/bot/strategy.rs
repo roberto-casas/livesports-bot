@@ -1,5 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
+use std::collections::HashSet;
 use tracing::{error, info, warn};
 
 use crate::config::Config;
@@ -36,6 +37,25 @@ impl BotEngine {
         })
     }
 
+    /// Determine which team scored by comparing the event type string.
+    /// Returns `true` if the home team scored, `false` if away.
+    fn home_team_scored(event: &ScoreEvent) -> bool {
+        // Event types containing "home" explicitly indicate home scoring
+        let et = event.event_type.to_lowercase();
+        if et.contains("home") {
+            return true;
+        }
+        if et.contains("away") {
+            return false;
+        }
+        // Fallback: if score differential moved in home's favour relative to
+        // a neutral baseline, assume home scored.  This covers generic events.
+        // NOTE: We cannot compare to previous score here, but the score monitor
+        // tags events with "_home"/"_away" suffixes so the above branches cover
+        // the common path.
+        event.home_score >= event.away_score
+    }
+
     /// Process a single score-change event.
     ///
     /// 1. Identify which Polymarket market(s) relate to this event.
@@ -51,6 +71,14 @@ impl BotEngine {
         // Persist the score event
         self.db.insert_score_event(event)?;
 
+        // Collect market IDs that already have open positions to avoid duplicates
+        let open_market_ids: HashSet<String> = self
+            .db
+            .list_open_positions()?
+            .into_iter()
+            .map(|p| p.market_id)
+            .collect();
+
         // Find candidate markets for this game
         let markets = self
             .polymarket
@@ -63,6 +91,12 @@ impl BotEngine {
         }
 
         for market in &markets {
+            // Skip markets where we already have an open position
+            if open_market_ids.contains(&market.id) {
+                info!("Already have open position in '{}', skipping", market.question);
+                continue;
+            }
+
             // Upsert market into DB
             self.db.upsert_market(market)?;
 
@@ -71,16 +105,16 @@ impl BotEngine {
                 _ => continue,
             };
 
-            // Determine which side to bet based on the score event
-            // (home scored → bet YES on home-wins market; away scored → bet NO)
-            let (bet_yes, true_win_prob) = if event.home_score > event.away_score {
-                // Home is winning – market might not yet reflect this
+            // Determine which side to bet based on WHO scored, not just who leads.
+            // This correctly handles tied scores (e.g., home scores to make it 1-1:
+            // home has momentum, bet YES).
+            let home_scored = Self::home_team_scored(event);
+            let (bet_yes, true_win_prob) = if home_scored {
                 let p = super::position::estimate_win_probability(event, game, true);
                 (true, p)
             } else {
-                // Away is winning
                 let p = super::position::estimate_win_probability(event, game, false);
-                (false, 1.0 - p) // bet NO = equivalent YES on the away-wins outcome
+                (false, 1.0 - p)
             };
 
             let price = if bet_yes { yes_price } else { 1.0 - yes_price };
@@ -102,6 +136,15 @@ impl BotEngine {
 
             if stake_usd < 1.0 {
                 info!("Stake too small (${:.2}), skipping", stake_usd);
+                continue;
+            }
+
+            // Guard: never let balance go negative
+            if stake_usd > self.balance {
+                warn!(
+                    "Stake ${:.2} exceeds available balance ${:.2}, skipping",
+                    stake_usd, self.balance
+                );
                 continue;
             }
 
@@ -164,24 +207,29 @@ impl BotEngine {
     }
 
     /// Sweep all open positions and close those that hit stop-loss or take-profit.
+    ///
+    /// Fetches current prices for ALL open positions concurrently to minimise
+    /// latency, then evaluates SL/TP sequentially.
     pub async fn manage_positions(&mut self) -> Result<()> {
         let open = self.db.list_open_positions()?;
         if open.is_empty() {
             return Ok(());
         }
 
-        for pos in open {
+        // Fetch all prices concurrently to cut N sequential round-trips to 1
+        let price_futures: Vec<_> = open
+            .iter()
+            .map(|pos| self.polymarket.get_token_price(&pos.market_id, &pos.outcome))
+            .collect();
+        let prices = futures_util::future::join_all(price_futures).await;
+
+        for (pos, price_result) in open.into_iter().zip(prices.into_iter()) {
             let pos_id = match pos.id {
                 Some(id) => id,
                 None => continue,
             };
 
-            // Fetch current price from Polymarket
-            let current_price = match self
-                .polymarket
-                .get_token_price(&pos.market_id, &pos.outcome)
-                .await
-            {
+            let current_price = match price_result {
                 Ok(p) => p,
                 Err(e) => {
                     warn!("Failed to get price for market {}: {}", pos.market_id, e);
