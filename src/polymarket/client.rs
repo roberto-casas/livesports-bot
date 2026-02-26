@@ -21,7 +21,10 @@ impl PolymarketClient {
         api_key: Option<String>,
     ) -> Result<Self> {
         let http = Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(3))
+            .connect_timeout(std::time::Duration::from_secs(2))
+            .pool_idle_timeout(std::time::Duration::from_secs(60))
+            .pool_max_idle_per_host(4)
             .build()
             .context("Failed to build HTTP client")?;
         Ok(PolymarketClient {
@@ -183,35 +186,41 @@ impl PolymarketClient {
     }
 
     /// Fetch all active sports markets from Polymarket (for background market discovery).
+    /// All sport tags are fetched **concurrently** to minimise total latency.
     pub async fn fetch_sports_markets(&self) -> Result<Vec<Market>> {
-        // Polymarket sports tag IDs (these are approximate; adjust as needed)
         let sports_tags = ["nfl", "nba", "soccer", "mls", "premier-league", "nhl", "mlb"];
 
-        let mut all_markets = Vec::new();
-
-        for tag in &sports_tags {
-            let url = format!(
-                "{}/markets?active=true&closed=false&limit=50&tag={}",
-                self.api_url, tag
-            );
-
-            let resp = match self.http.get(&url).send().await {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!("Failed to fetch {} markets: {}", tag, e);
-                    continue;
-                }
-            };
-
-            if resp.status().is_success() {
-                if let Ok(raw) = resp.json::<serde_json::Value>().await {
-                    if let Ok(markets) = parse_markets(&raw, tag) {
-                        all_markets.extend(markets);
+        let fetch_futures: Vec<_> = sports_tags
+            .iter()
+            .map(|tag| {
+                let url = format!(
+                    "{}/markets?active=true&closed=false&limit=50&tag={}",
+                    self.api_url, tag
+                );
+                let http = self.http.clone();
+                let tag = tag.to_string();
+                async move {
+                    let resp = match http.get(&url).send().await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::warn!("Failed to fetch {} markets: {}", tag, e);
+                            return Vec::new();
+                        }
+                    };
+                    if resp.status().is_success() {
+                        if let Ok(raw) = resp.json::<serde_json::Value>().await {
+                            if let Ok(markets) = parse_markets(&raw, &tag) {
+                                return markets;
+                            }
+                        }
                     }
+                    Vec::new()
                 }
-            }
-        }
+            })
+            .collect();
 
+        let results = futures_util::future::join_all(fetch_futures).await;
+        let all_markets: Vec<Market> = results.into_iter().flatten().collect();
         Ok(all_markets)
     }
 }

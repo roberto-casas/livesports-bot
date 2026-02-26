@@ -18,6 +18,7 @@ use dashboard::AppState;
 use db::Database;
 use live_scores::{start_score_monitor, TheSportsDB};
 use polymarket::PolymarketClient;
+use live_scores::ScoreProvider;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -58,11 +59,17 @@ async fn main() -> Result<()> {
         config.polymarket_api_key.clone(),
     )?;
 
-    // Build score provider
-    let score_provider: Arc<dyn live_scores::ScoreProvider> = Arc::new(TheSportsDB::new(
+    // Build score providers (multiple for parallel redundancy).
+    // Additional providers can be added here for faster signal.
+    let mut score_providers: Vec<Arc<dyn ScoreProvider>> = Vec::new();
+    score_providers.push(Arc::new(TheSportsDB::new(
         config.live_scores_api_key.as_deref(),
         None,
-    )?);
+    )?));
+    // TODO: Add more providers here for parallel data ingestion:
+    // score_providers.push(Arc::new(ApiFootball::new(api_key)?));
+    // score_providers.push(Arc::new(SportRadar::new(api_key)?));
+    info!("Configured {} score provider(s)", score_providers.len());
 
     // Start the dashboard HTTP server
     let dashboard_state = AppState {
@@ -82,7 +89,7 @@ async fn main() -> Result<()> {
     let poll_interval = Duration::from_secs(config.poll_interval_secs);
 
     tokio::spawn(async move {
-        let mut rx = start_score_monitor(score_provider, poll_interval);
+        let mut rx = start_score_monitor(score_providers, poll_interval);
 
         let mut engine = match BotEngine::new(bot_config.clone(), bot_db.clone(), bot_polymarket) {
             Ok(e) => e,
