@@ -64,6 +64,18 @@ pub struct Config {
     #[arg(long, env = "LIVE_SCORES_API_KEY")]
     pub live_scores_api_key: Option<String>,
 
+    /// AllSportsAPI key for WebSocket live scores (optional; enables real-time push)
+    #[arg(long, env = "ALLSPORTSAPI_KEY")]
+    pub allsportsapi_key: Option<String>,
+
+    /// Polymarket Sports WebSocket URL for real-time score feed (no auth needed)
+    #[arg(
+        long,
+        env = "POLYMARKET_SPORTS_WS_URL",
+        default_value = "wss://sports-api.polymarket.com/ws"
+    )]
+    pub polymarket_sports_ws_url: String,
+
     /// Maximum fraction of bankroll to bet (Kelly multiplier, 0.0–1.0)
     #[arg(long, env = "KELLY_FRACTION", default_value = "0.25")]
     pub kelly_fraction: f64,
