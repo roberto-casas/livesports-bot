@@ -6,7 +6,7 @@ use tracing::{error, info, warn};
 use crate::config::Config;
 use crate::db::models::{Position, ScoreEvent};
 use crate::db::{Database, models::LiveGame};
-use crate::polymarket::PolymarketClient;
+use crate::polymarket::{MarketCache, PolymarketClient};
 
 use super::kelly::{edge, kelly_stake};
 use super::position::{compute_levels, evaluate_position, PositionAction};
@@ -17,12 +17,20 @@ pub struct BotEngine {
     config: Config,
     db: Database,
     polymarket: PolymarketClient,
+    /// Pre-loaded market cache — searched first on score events (sub-μs).
+    /// Falls through to REST API on cache miss.
+    market_cache: MarketCache,
     /// Current simulated balance (USD) in dry-run mode
     balance: f64,
 }
 
 impl BotEngine {
-    pub fn new(config: Config, db: Database, polymarket: PolymarketClient) -> Result<Self> {
+    pub fn new(
+        config: Config,
+        db: Database,
+        polymarket: PolymarketClient,
+        market_cache: MarketCache,
+    ) -> Result<Self> {
         let balance = db.get_balance()?;
         let balance = if balance <= 0.0 {
             config.initial_balance
@@ -33,6 +41,7 @@ impl BotEngine {
             config,
             db,
             polymarket,
+            market_cache,
             balance,
         })
     }
@@ -79,11 +88,24 @@ impl BotEngine {
             .map(|p| p.market_id)
             .collect();
 
-        // Find candidate markets for this game
-        let markets = self
-            .polymarket
-            .search_markets(&event.home_team, &event.away_team, &event.league)
-            .await?;
+        // Find candidate markets — cache first (sub-μs), REST fallback (~1.5s)
+        let mut markets = self
+            .market_cache
+            .search(&event.home_team, &event.away_team, &event.league)
+            .await;
+
+        if markets.is_empty() {
+            info!("Cache miss, falling back to REST API for market search");
+            markets = self
+                .polymarket
+                .search_markets(&event.home_team, &event.away_team, &event.league)
+                .await?;
+
+            // Backfill cache with the results so next event is instant
+            if !markets.is_empty() {
+                self.market_cache.load(markets.clone()).await;
+            }
+        }
 
         if markets.is_empty() {
             info!("No Polymarket markets found for this game");

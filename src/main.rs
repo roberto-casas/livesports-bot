@@ -17,7 +17,7 @@ use config::Config;
 use dashboard::AppState;
 use db::Database;
 use live_scores::{start_score_monitor, TheSportsDB};
-use polymarket::PolymarketClient;
+use polymarket::{MarketCache, PolymarketClient};
 use live_scores::ScoreProvider;
 
 #[tokio::main]
@@ -111,16 +111,21 @@ async fn main() -> Result<()> {
     info!("Dashboard listening on http://{}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
+    // Create the shared market cache — populated by background task, read
+    // by the bot engine on every score event for instant market lookup.
+    let market_cache = MarketCache::new();
+
     // Start bot engine in its own task
     let bot_config = config.clone();
     let bot_db = db.clone();
     let bot_polymarket = polymarket.clone();
+    let bot_cache = market_cache.clone();
     let poll_interval = Duration::from_secs(config.poll_interval_secs);
 
     tokio::spawn(async move {
         let mut rx = start_score_monitor(score_providers, poll_interval);
 
-        let mut engine = match BotEngine::new(bot_config.clone(), bot_db.clone(), bot_polymarket) {
+        let mut engine = match BotEngine::new(bot_config.clone(), bot_db.clone(), bot_polymarket, bot_cache.clone()) {
             Ok(e) => e,
             Err(err) => {
                 error!("Failed to create bot engine: {}", err);
@@ -128,7 +133,8 @@ async fn main() -> Result<()> {
             }
         };
 
-        // Background market-discovery task
+        // Background market-discovery task — fetches all sports markets and
+        // populates both SQLite (durable) and MarketCache (fast in-memory).
         {
             let poly_clone = PolymarketClient::new(
                 &bot_config.polymarket_api_url,
@@ -136,19 +142,30 @@ async fn main() -> Result<()> {
                 bot_config.polymarket_api_key.clone(),
             );
             let db_clone = bot_db.clone();
+            let cache_clone = bot_cache.clone();
             if let Ok(poly) = poly_clone {
                 tokio::spawn(async move {
-                    let mut interval = tokio::time::interval(Duration::from_secs(300));
+                    // Do an immediate fetch on startup so the cache is warm before
+                    // any score events arrive.
+                    let mut interval = tokio::time::interval(Duration::from_secs(120));
                     loop {
                         interval.tick().await;
                         match poly.fetch_sports_markets().await {
                             Ok(markets) => {
-                                info!("Discovered {} Polymarket sports markets", markets.len());
+                                info!(
+                                    "Discovered {} Polymarket sports markets, loading into cache",
+                                    markets.len()
+                                );
+                                // Populate in-memory cache for instant lookups
+                                cache_clone.load(markets.clone()).await;
+
+                                // Persist to SQLite for durability
                                 for m in &markets {
                                     if let Err(e) = db_clone.upsert_market(m) {
                                         warn!("Failed to upsert market {}: {}", m.id, e);
                                     }
                                 }
+                                info!("MarketCache: {} markets preloaded", cache_clone.len().await);
                             }
                             Err(e) => warn!("Market discovery failed: {}", e),
                         }
