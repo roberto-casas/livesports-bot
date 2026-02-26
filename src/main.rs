@@ -59,16 +59,41 @@ async fn main() -> Result<()> {
         config.polymarket_api_key.clone(),
     )?;
 
-    // Build score providers (multiple for parallel redundancy).
-    // Additional providers can be added here for faster signal.
+    // Build score providers (multiple for parallel redundancy + speed).
+    // REST providers are polled; WebSocket providers push data in real-time.
     let mut score_providers: Vec<Arc<dyn ScoreProvider>> = Vec::new();
+
+    // 1. REST fallback: TheSportsDB (free tier, polled every N seconds)
     score_providers.push(Arc::new(TheSportsDB::new(
         config.live_scores_api_key.as_deref(),
         None,
     )?));
-    // TODO: Add more providers here for parallel data ingestion:
-    // score_providers.push(Arc::new(ApiFootball::new(api_key)?));
-    // score_providers.push(Arc::new(SportRadar::new(api_key)?));
+
+    // 2. WebSocket providers for real-time push (zero polling delay).
+    //    Uncomment and configure with your API keys:
+    //
+    //    // API-Football real-time feed (requires paid plan with WS access)
+    //    score_providers.push(Arc::new(live_scores::WebSocketProvider::new(
+    //        live_scores::WebSocketProviderConfig {
+    //            name: "API-Football-WS".into(),
+    //            url: format!("wss://v3.football.api-sports.io/ws?token={}", api_football_key),
+    //            subscribe_message: Some(r#"{"action":"subscribe","data":["livescore"]}"#.into()),
+    //            parse_fn: Arc::new(live_scores::websocket::parse_api_football),
+    //            ping_interval_secs: 25,
+    //        },
+    //    )));
+    //
+    //    // BetsAPI real-time feed
+    //    score_providers.push(Arc::new(live_scores::WebSocketProvider::new(
+    //        live_scores::WebSocketProviderConfig {
+    //            name: "BetsAPI-WS".into(),
+    //            url: format!("wss://api.betsapi.com/ws?token={}", betsapi_key),
+    //            subscribe_message: Some(r#"{"type":"subscribe","sports":["soccer","basketball","football"]}"#.into()),
+    //            parse_fn: Arc::new(live_scores::websocket::parse_betsapi),
+    //            ping_interval_secs: 30,
+    //        },
+    //    )));
+
     info!("Configured {} score provider(s)", score_providers.len());
 
     // Start the dashboard HTTP server
