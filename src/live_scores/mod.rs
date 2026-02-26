@@ -1,8 +1,10 @@
 pub mod provider;
 pub mod sports;
+pub mod websocket;
 
 pub use provider::ScoreProvider;
 pub use sports::{TheSportsDB, detect_score_change};
+pub use websocket::{WebSocketProvider, WebSocketProviderConfig};
 
 use chrono::Utc;
 use std::collections::HashMap;
