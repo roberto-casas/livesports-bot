@@ -69,30 +69,34 @@ async fn main() -> Result<()> {
         None,
     )?));
 
-    // 2. WebSocket providers for real-time push (zero polling delay).
-    //    Uncomment and configure with your API keys:
-    //
-    //    // API-Football real-time feed (requires paid plan with WS access)
-    //    score_providers.push(Arc::new(live_scores::WebSocketProvider::new(
-    //        live_scores::WebSocketProviderConfig {
-    //            name: "API-Football-WS".into(),
-    //            url: format!("wss://v3.football.api-sports.io/ws?token={}", api_football_key),
-    //            subscribe_message: Some(r#"{"action":"subscribe","data":["livescore"]}"#.into()),
-    //            parse_fn: Arc::new(live_scores::websocket::parse_api_football),
-    //            ping_interval_secs: 25,
-    //        },
-    //    )));
-    //
-    //    // BetsAPI real-time feed
-    //    score_providers.push(Arc::new(live_scores::WebSocketProvider::new(
-    //        live_scores::WebSocketProviderConfig {
-    //            name: "BetsAPI-WS".into(),
-    //            url: format!("wss://api.betsapi.com/ws?token={}", betsapi_key),
-    //            subscribe_message: Some(r#"{"type":"subscribe","sports":["soccer","basketball","football"]}"#.into()),
-    //            parse_fn: Arc::new(live_scores::websocket::parse_betsapi),
-    //            ping_interval_secs: 30,
-    //        },
-    //    )));
+    // 2. Polymarket Sports WebSocket — free, no auth, real-time scores
+    score_providers.push(Arc::new(live_scores::WebSocketProvider::new(
+        live_scores::WebSocketProviderConfig {
+            name: "Polymarket-Sports-WS".into(),
+            url: config.polymarket_sports_ws_url.clone(),
+            subscribe_message: None, // No subscription needed — auto-pushes all live events
+            parse_fn: Arc::new(live_scores::websocket::parse_polymarket_sports),
+            ping_interval_secs: 5, // Server pings every 5s with text "ping"
+        },
+    )));
+
+    // 3. AllSportsAPI WebSocket — requires API key, multi-sport real-time push
+    if let Some(ref allsports_key) = config.allsportsapi_key {
+        let ws_url = format!(
+            "wss://wss.allsportsapi.com/live_events?APIkey={}&timezone=+00:00",
+            allsports_key
+        );
+        score_providers.push(Arc::new(live_scores::WebSocketProvider::new(
+            live_scores::WebSocketProviderConfig {
+                name: "AllSportsAPI-WS".into(),
+                url: ws_url,
+                subscribe_message: None, // Server auto-pushes all live events
+                parse_fn: Arc::new(live_scores::websocket::parse_allsportsapi),
+                ping_interval_secs: 25,
+            },
+        )));
+        info!("AllSportsAPI WebSocket provider enabled");
+    }
 
     info!("Configured {} score provider(s)", score_providers.len());
 
