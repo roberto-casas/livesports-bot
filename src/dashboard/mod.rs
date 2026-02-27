@@ -225,8 +225,8 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
   <div class="panel">
     <div class="panel-header">Monitored Markets</div>
     <table>
-      <thead><tr><th>Question</th><th>League</th><th>YES</th><th>NO</th><th>Volume</th></tr></thead>
-      <tbody id="markets-tbody"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+      <thead><tr><th>Question</th><th>League</th><th>YES</th><th>NO</th><th>Volume</th><th>Liquidity</th><th>Ends</th></tr></thead>
+      <tbody id="markets-tbody"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
     </table>
   </div>
 </main>
@@ -305,9 +305,12 @@ async function loadPositions() {
     const pnlClass = p.pnl != null ? (p.pnl >= 0 ? 'pos' : 'neg') : '';
     const statusClass = { open:'open', closed_profit:'profit', closed_stop_loss:'stoploss', closed_loss:'loss', closed_feed_health:'stoploss', closed_time_exit:'stoploss' }[p.status] || 'open';
     const statusLabel = { open:'Open', closed_profit:'Profit', closed_stop_loss:'Stop Loss', closed_loss:'Loss', closed_feed_health:'Feed Flatten', closed_time_exit:'Time Exit' }[p.status] || p.status;
-    const market = p.event_name || p.market_id.slice(0,12)+'…';
+    const label = p.event_name || p.market_id.slice(0,12)+'…';
+    const marketCell = p.market_slug
+      ? `<a href="https://polymarket.com/event/${p.market_slug}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;" title="${p.market_id}">${label}</a>`
+      : `<span title="${p.market_id}">${label}</span>`;
     return `<tr>
-      <td title="${p.market_id}">${market}</td>
+      <td>${marketCell}</td>
       <td>${p.outcome}</td>
       <td>${fmt.format(p.size_usd)}</td>
       <td>${(p.entry_price*100).toFixed(1)}¢</td>
@@ -336,14 +339,23 @@ async function loadMarkets() {
   if (!r.ok) return;
   const markets = await r.json();
   const tbody = document.getElementById('markets-tbody');
-  if (!markets.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">No markets tracked yet</td></tr>'; return; }
-  tbody.innerHTML = markets.slice(0,20).map(m => `<tr>
-    <td title="${m.id}">${m.question}</td>
-    <td>${m.league || m.sport || '–'}</td>
-    <td>${m.yes_price != null ? pct(m.yes_price) : '–'}</td>
-    <td>${m.no_price != null ? pct(m.no_price) : '–'}</td>
-    <td>${m.volume != null ? fmt.format(m.volume) : '–'}</td>
-  </tr>`).join('');
+  if (!markets.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty">No markets tracked yet</td></tr>'; return; }
+  tbody.innerHTML = markets.slice(0,20).map(m => {
+    const link = m.slug
+      ? `<a href="https://polymarket.com/event/${m.slug}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;" title="${m.id}">${m.question}</a>`
+      : `<span title="${m.id}">${m.question}</span>`;
+    const ends = m.end_date ? new Date(m.end_date).toLocaleDateString() : '–';
+    const liq  = m.liquidity != null ? fmt.format(m.liquidity) : '–';
+    return `<tr>
+      <td>${link}</td>
+      <td>${m.league || m.sport || '–'}</td>
+      <td>${m.yes_price != null ? pct(m.yes_price) : '–'}</td>
+      <td>${m.no_price  != null ? pct(m.no_price)  : '–'}</td>
+      <td>${m.volume    != null ? fmt.format(m.volume) : '–'}</td>
+      <td>${liq}</td>
+      <td>${ends}</td>
+    </tr>`;
+  }).join('');
 }
 
 let chartCtx, chartData = { labels: [], datasets: [] };
