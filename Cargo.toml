@@ -1,6 +1,6 @@
 [package]
 name = "livesports-bot"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 description = "Polymarket sports betting bot with live score monitoring and web dashboard"
 
