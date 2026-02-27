@@ -341,19 +341,31 @@ async function loadMarkets() {
   const tbody = document.getElementById('markets-tbody');
   if (!markets.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty">No markets tracked yet</td></tr>'; return; }
   tbody.innerHTML = markets.slice(0,20).map(m => {
+    const desc = m.event_name ? ` — ${m.event_name}` : '';
+    const tooltip = m.id + desc;
     const link = m.slug
-      ? `<a href="https://polymarket.com/event/${m.slug}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;" title="${m.id}">${m.question}</a>`
-      : `<span title="${m.id}">${m.question}</span>`;
+      ? `<a href="https://polymarket.com/event/${m.slug}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;" title="${tooltip}">${m.question}</a>`
+      : `<span title="${tooltip}">${m.question}</span>`;
     const ends = m.end_date ? new Date(m.end_date).toLocaleDateString() : '–';
     const liq  = m.liquidity != null ? fmt.format(m.liquidity) : '–';
+    const spreadCents = (m.yes_price != null && m.no_price != null)
+      ? Math.max(0, (1 - m.yes_price - m.no_price) * 100).toFixed(1) + '¢'
+      : '–';
+    const statusPillClass = { active: 'open', closed: '', resolved: 'profit' }[m.status] || '';
+    const statusLabel = m.status ? m.status.charAt(0).toUpperCase() + m.status.slice(1) : '–';
+    const statusPill = m.status
+      ? `<span class="pill ${statusPillClass}" style="${!statusPillClass ? 'background:rgba(136,136,170,.15);color:var(--muted)' : ''}">${statusLabel}</span>`
+      : '–';
     return `<tr>
       <td>${link}</td>
       <td>${m.league || m.sport || '–'}</td>
       <td>${m.yes_price != null ? pct(m.yes_price) : '–'}</td>
       <td>${m.no_price  != null ? pct(m.no_price)  : '–'}</td>
+      <td>${spreadCents}</td>
       <td>${m.volume    != null ? fmt.format(m.volume) : '–'}</td>
       <td>${liq}</td>
       <td>${ends}</td>
+      <td>${statusPill}</td>
     </tr>`;
   }).join('');
 }
