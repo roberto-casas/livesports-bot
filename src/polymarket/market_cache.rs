@@ -115,6 +115,25 @@ impl MarketCache {
         results
     }
 
+    /// Insert or update markets without clearing existing entries.
+    ///
+    /// Use this for cache-miss backfills so one lookup doesn't wipe all the
+    /// tag-filtered sports markets loaded by the background discovery task.
+    pub async fn insert_many(&self, markets: Vec<Market>) {
+        let mut inner = self.inner.write().await;
+        for market in markets {
+            let tokens = extract_tokens(&market.question, market.event_name.as_deref());
+            for token in &tokens {
+                inner
+                    .token_index
+                    .entry(token.clone())
+                    .or_default()
+                    .insert(market.id.clone());
+            }
+            inner.markets.insert(market.id.clone(), market);
+        }
+    }
+
     /// Number of cached markets.
     pub async fn len(&self) -> usize {
         self.inner.read().await.markets.len()
@@ -141,7 +160,26 @@ fn token_candidates<'a>(
     candidates
 }
 
+/// Common English words that are ≥ 3 chars but carry no sports-entity meaning.
+/// Indexing them creates false-positive matches when team name tokens overlap
+/// (e.g. "Willian FC" containing "will" matching "Will Jesus Christ return…").
+const STOP_WORDS: &[&str] = &[
+    // Modal / auxiliary verbs
+    "will", "shall", "would", "could", "should", "might", "must", "have",
+    "been", "were", "was", "has", "had", "did", "does", "are", "not",
+    // Determiners / pronouns
+    "the", "this", "that", "these", "those", "which", "who", "whom",
+    "whose", "what", "all", "both", "each", "either", "neither", "any",
+    "some", "few", "more", "most", "other", "such", "than", "then",
+    "they", "them", "their", "your", "its", "our", "her", "him", "his",
+    // Conjunctions / prepositions
+    "and", "but", "for", "nor", "yet", "from", "into", "onto", "with",
+    "about", "after", "before", "during", "through", "within", "along",
+    "among", "upon", "since", "until", "while", "there", "here",
+];
+
 /// Extract normalized lowercase tokens from a market question and event name.
+/// Stop words are excluded so common English words don't pollute the index.
 fn extract_tokens(question: &str, event_name: Option<&str>) -> Vec<String> {
     let mut combined = question.to_string();
     if let Some(en) = event_name {
@@ -152,7 +190,8 @@ fn extract_tokens(question: &str, event_name: Option<&str>) -> Vec<String> {
     combined
         .to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
-        .filter(|s| s.len() >= 3) // skip "vs", "to", "the", etc.
+        .filter(|s| s.len() >= 3)
+        .filter(|s| !STOP_WORDS.contains(s))
         .map(|s| s.to_string())
         .collect()
 }
@@ -185,6 +224,9 @@ mod tests {
             volume: Some(50000.0),
             status: "active".to_string(),
             fetched_at: Utc::now(),
+            slug: None,
+            end_date: None,
+            liquidity: None,
         }
     }
 
@@ -262,5 +304,80 @@ mod tests {
 
         let results = cache.search("Arsenal", "Chelsea", "").await;
         assert!(results.is_empty());
+    }
+
+    /// Non-sports market whose question starts with "Will" should NOT match a
+    /// team whose name contains "will" as a substring (e.g. "Willian FC").
+    /// This guards against stop-word tokens polluting the index.
+    #[tokio::test]
+    async fn test_stop_words_not_indexed_preventing_false_positive() {
+        let cache = MarketCache::new();
+        cache
+            .load(vec![make_market(
+                "non-sports",
+                "Will Jesus Christ return before GTA VI?",
+                None,
+            )])
+            .await;
+
+        // "Willian" contains "will" as a substring. Without stop-word filtering
+        // the indexed "will" token would match "willian" via substring search.
+        let results = cache.search("Willian FC", "Arsenal", "premier-league").await;
+        assert!(
+            results.is_empty(),
+            "Non-sports market matched via stop-word token 'will': {:?}",
+            results.iter().map(|m| &m.question).collect::<Vec<_>>()
+        );
+    }
+
+    /// insert_many must ADD markets to the cache without wiping existing ones.
+    #[tokio::test]
+    async fn test_insert_many_does_not_wipe_existing_cache() {
+        let cache = MarketCache::new();
+        cache
+            .load(vec![make_market(
+                "m1",
+                "Arsenal vs Chelsea Winner",
+                Some("Arsenal vs Chelsea"),
+            )])
+            .await;
+
+        // Simulate a cache-miss backfill for a different game.
+        cache
+            .insert_many(vec![make_market(
+                "m2",
+                "Liverpool vs Manchester United Winner",
+                Some("Liverpool vs Manchester United"),
+            )])
+            .await;
+
+        let r1 = cache.search("Arsenal", "Chelsea", "premier-league").await;
+        assert_eq!(r1.len(), 1, "Original market should survive insert_many");
+
+        let r2 = cache
+            .search("Liverpool", "Manchester United", "premier-league")
+            .await;
+        assert_eq!(r2.len(), 1, "Backfilled market should be findable");
+    }
+
+    /// insert_many must update an already-cached market (e.g. refreshed prices).
+    #[tokio::test]
+    async fn test_insert_many_updates_existing_market() {
+        let cache = MarketCache::new();
+        let mut original = make_market("m1", "Arsenal vs Chelsea Winner", None);
+        original.yes_price = Some(0.60);
+        cache.load(vec![original]).await;
+
+        let mut updated = make_market("m1", "Arsenal vs Chelsea Winner", None);
+        updated.yes_price = Some(0.75);
+        cache.insert_many(vec![updated]).await;
+
+        let results = cache.search("Arsenal", "Chelsea", "premier-league").await;
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].yes_price,
+            Some(0.75),
+            "insert_many should overwrite the stale entry"
+        );
     }
 }
