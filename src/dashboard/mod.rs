@@ -225,7 +225,7 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
   <div class="panel">
     <div class="panel-header">Monitored Markets</div>
     <table>
-      <thead><tr><th>Question</th><th>League</th><th>YES</th><th>NO</th><th>Volume</th><th>Liquidity</th><th>Ends</th></tr></thead>
+      <thead><tr><th>Question</th><th>League</th><th>YES</th><th>NO</th><th>Spread</th><th>Volume</th><th>Liquidity</th><th>Ends</th><th>Status</th></tr></thead>
       <tbody id="markets-tbody"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
     </table>
   </div>
@@ -339,7 +339,7 @@ async function loadMarkets() {
   if (!r.ok) return;
   const markets = await r.json();
   const tbody = document.getElementById('markets-tbody');
-  if (!markets.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty">No markets tracked yet</td></tr>'; return; }
+  if (!markets.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty">No markets tracked yet</td></tr>'; return; }
   tbody.innerHTML = markets.slice(0,20).map(m => {
     const link = m.slug
       ? `<a href="https://polymarket.com/event/${m.slug}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;" title="${m.id}">${m.question}</a>`
