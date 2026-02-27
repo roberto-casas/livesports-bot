@@ -19,6 +19,9 @@ pub struct Market {
     /// "active" | "closed" | "resolved"
     pub status: String,
     pub fetched_at: DateTime<Utc>,
+    pub slug: Option<String>,
+    pub end_date: Option<DateTime<Utc>>,
+    pub liquidity: Option<f64>,
 }
 
 /// An open or closed betting position
