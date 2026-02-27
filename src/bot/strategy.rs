@@ -132,10 +132,10 @@ impl BotEngine {
             // home has momentum, bet YES).
             let home_scored = Self::home_team_scored(event);
             let (bet_yes, true_win_prob) = if home_scored {
-                let p = super::position::estimate_win_probability(event, game, true);
+                let p = super::win_probability::estimate_win_probability(event, game, true);
                 (true, p)
             } else {
-                let p = super::position::estimate_win_probability(event, game, false);
+                let p = super::win_probability::estimate_win_probability(event, game, false);
                 (false, 1.0 - p)
             };
 

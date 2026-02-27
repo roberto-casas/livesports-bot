@@ -1,4 +1,4 @@
-use crate::db::models::{LiveGame, Position, ScoreEvent};
+use crate::db::models::Position;
 
 /// Decision made by the position manager for a live position
 #[derive(Debug, Clone, PartialEq)]
@@ -58,64 +58,14 @@ pub fn compute_levels(
     (stop_loss_price, take_profit_price)
 }
 
-/// Estimate the true probability of the winning team given a score change.
-///
-/// This is a simplified model based on goal/point advantage and time remaining.
-/// In production you would integrate a proper prediction model or external odds feed.
-///
-/// # Arguments
-/// * `event`    – The score change event.
-/// * `game`     – The current game state.
-/// * `for_home` – Whether we are estimating the home team's win probability.
-pub fn estimate_win_probability(event: &ScoreEvent, game: &LiveGame, for_home: bool) -> f64 {
-    let home_score = game.home_score;
-    let away_score = game.away_score;
-    let diff = (home_score - away_score) as f64;
-
-    // Time fraction remaining (0 = just started, 1 = game over)
-    let (_max_minutes, time_fraction) = match event.sport.as_str() {
-        "soccer" | "football_eu" => {
-            let max = 90.0_f64;
-            let elapsed = event.minute.unwrap_or(0) as f64;
-            (max, (elapsed / max).min(1.0))
-        }
-        "american_football" | "nfl" => {
-            let max = 60.0_f64;
-            let elapsed = event.minute.unwrap_or(0) as f64;
-            (max, (elapsed / max).min(1.0))
-        }
-        "basketball" | "nba" => {
-            let max = 48.0_f64;
-            let elapsed = event.minute.unwrap_or(0) as f64;
-            (max, (elapsed / max).min(1.0))
-        }
-        "baseball" | "mlb" => {
-            // Use innings as proxy; 9 innings
-            let max = 9.0_f64;
-            let elapsed = event.minute.unwrap_or(0) as f64;
-            (max, (elapsed / max).min(1.0))
-        }
-        _ => (90.0, 0.5),
-    };
-
-    // Base probability: sigmoid of goal difference scaled by time remaining
-    // As time progresses, the current score matters more
-    let base_p = 0.5 + diff * 0.15 * (0.5 + 0.5 * time_fraction);
-    let home_win_p = base_p.min(0.97).max(0.03);
-
-    if for_home {
-        home_win_p
-    } else {
-        1.0 - home_win_p
-    }
-}
+// Win probability estimation has moved to `super::win_probability` with
+// sport-specific models (soccer lookup table, NBA/NFL/MLB logistic, etc.).
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
     use chrono::Utc;
-    use crate::db::models::{GameStatus, LiveGame, ScoreEvent};
 
     fn make_position(entry: f64, stop: f64, take: f64) -> Position {
         Position {
@@ -179,49 +129,6 @@ mod tests {
         assert!(take <= 0.99);
     }
 
-    fn make_score_event(sport: &str, home: i32, away: i32, minute: i32) -> ScoreEvent {
-        ScoreEvent {
-            id: None,
-            event_id: "ev1".into(),
-            sport: sport.into(),
-            league: "test".into(),
-            home_team: "Home".into(),
-            away_team: "Away".into(),
-            home_score: home,
-            away_score: away,
-            minute: Some(minute),
-            event_type: "goal".into(),
-            detected_at: Utc::now(),
-        }
-    }
-
-    fn make_live_game(sport: &str, home: i32, away: i32) -> LiveGame {
-        LiveGame {
-            event_id: "ev1".into(),
-            sport: sport.into(),
-            league: "test".into(),
-            home_team: "Home".into(),
-            away_team: "Away".into(),
-            home_score: home,
-            away_score: away,
-            minute: Some(75),
-            status: GameStatus::InProgress,
-        }
-    }
-
-    #[test]
-    fn test_win_prob_leading_team() {
-        let ev = make_score_event("soccer", 2, 0, 75);
-        let game = make_live_game("soccer", 2, 0);
-        let p_home = estimate_win_probability(&ev, &game, true);
-        assert!(p_home > 0.5, "Leading team should have p > 0.5, got {}", p_home);
-    }
-
-    #[test]
-    fn test_win_prob_trailing_team() {
-        let ev = make_score_event("soccer", 0, 2, 75);
-        let game = make_live_game("soccer", 0, 2);
-        let p_home = estimate_win_probability(&ev, &game, true);
-        assert!(p_home < 0.5, "Trailing team should have p < 0.5, got {}", p_home);
-    }
+    // Win probability tests are now in super::win_probability::tests
+    // with comprehensive sport-specific test coverage.
 }
