@@ -1052,14 +1052,28 @@ impl BotEngine {
 
         if markets.is_empty() {
             info!("Cache miss, falling back to REST API for market search");
-            markets = self
+            let raw_markets = self
                 .polymarket
                 .search_markets(&event.home_team, &event.away_team, &event.league)
                 .await?;
 
-            // Backfill cache with the results so next event is instant
+            // The REST endpoint is an unfiltered full-text search that can return
+            // non-sports markets (e.g. "Will Jesus Christ return before GTA VI?")
+            // when team-name tokens overlap with unrelated question text.
+            // Keep only markets where at least one team name actually appears.
+            markets = raw_markets
+                .into_iter()
+                .filter(|m| {
+                    let q = Self::normalize_text(&m.question);
+                    Self::contains_team(&q, &event.home_team)
+                        || Self::contains_team(&q, &event.away_team)
+                })
+                .collect();
+
+            // Backfill with insert_many — never wipes the tag-filtered sports
+            // markets already loaded by the background discovery task.
             if !markets.is_empty() {
-                self.market_cache.load(markets.clone()).await;
+                self.market_cache.insert_many(markets.clone()).await;
             }
         }
 
@@ -1512,6 +1526,7 @@ impl BotEngine {
                 sport: Some(event.sport.clone()),
                 league: Some(event.league.clone()),
                 event_name: Some(format!("{} vs {}", event.home_team, event.away_team)),
+                market_slug: market.slug.clone(),
             };
 
             let _id = self.db.insert_position(&pos)?;

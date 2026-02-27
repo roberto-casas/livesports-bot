@@ -97,6 +97,7 @@ mod tests {
             sport: None,
             league: None,
             event_name: None,
+            market_slug: None,
         }
     }
 
