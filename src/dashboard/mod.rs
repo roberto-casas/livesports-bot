@@ -130,6 +130,8 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
   .stat-card .value { font-size: 1.7rem; font-weight: 700; }
   .value.pos { color: var(--green); }
   .value.neg { color: var(--red); }
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
   .panel { background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
   .panel-header { padding: .9rem 1.2rem; border-bottom: 1px solid var(--border); font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
   table { width: 100%; border-collapse: collapse; }
@@ -166,6 +168,29 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
     <div class="stat-card"><div class="label">Total Trades</div><div class="value" id="s-trades">–</div></div>
     <div class="stat-card"><div class="label">Win Rate</div><div class="value" id="s-winrate">–</div></div>
     <div class="stat-card"><div class="label">Total P&L</div><div class="value" id="s-pnl">–</div></div>
+    <div class="stat-card"><div class="label">WS Entry Rate</div><div class="value" id="s-ws-entry-rate">–</div></div>
+    <div class="stat-card"><div class="label">REST Fallback Rate</div><div class="value" id="s-rest-fallback-rate">–</div></div>
+    <div class="stat-card"><div class="label">Avg Last WS Age</div><div class="value" id="s-avg-ws-age">–</div></div>
+    <div class="stat-card"><div class="label">Avg Entry WS Age</div><div class="value" id="s-avg-entry-ws-age">–</div></div>
+    <div class="stat-card"><div class="label">Avg Closed CLV</div><div class="value" id="s-avg-clv-bps">–</div></div>
+    <div class="stat-card"><div class="label">Calib Models</div><div class="value" id="s-cal-models">–</div></div>
+    <div class="stat-card"><div class="label">Last Calibration</div><div class="value" id="s-cal-last">–</div></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">Quote Quality by Sport</div>
+    <table>
+      <thead><tr><th>Sport</th><th>WS Marks</th><th>REST Fallbacks</th><th>Fallback Rate</th><th>Avg WS Age</th></tr></thead>
+      <tbody id="sport-quote-tbody"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">CLV by Sport (Closed Trades)</div>
+    <table>
+      <thead><tr><th>Sport</th><th>Trades</th><th>Avg CLV</th><th>Win Rate</th></tr></thead>
+      <tbody id="sport-clv-tbody"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody>
+    </table>
   </div>
 
   <!-- Balance chart -->
@@ -209,6 +234,8 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
 <script>
 const fmt = new Intl.NumberFormat('en-US', { style:'currency', currency:'USD', minimumFractionDigits:2 });
 const pct = v => (v*100).toFixed(1)+'%';
+const ms = v => Number.isFinite(v) ? Math.round(v) + ' ms' : '–';
+const bps = v => Number.isFinite(v) ? (v >= 0 ? '+' : '') + v.toFixed(1) + ' bps' : '–';
 const timeAgo = ts => {
   const d = (Date.now() - new Date(ts).getTime()) / 1000;
   if (d < 60) return Math.round(d)+'s ago';
@@ -229,6 +256,42 @@ async function loadStats() {
   const pnlEl = document.getElementById('s-pnl');
   pnlEl.textContent = (s.total_pnl >= 0 ? '+' : '') + fmt.format(s.total_pnl);
   pnlEl.className = 'value ' + (s.total_pnl >= 0 ? 'pos' : 'neg');
+  document.getElementById('s-ws-entry-rate').textContent = pct(s.ws_entry_rate || 0);
+  document.getElementById('s-rest-fallback-rate').textContent = pct(s.rest_fallback_rate || 0);
+  document.getElementById('s-avg-ws-age').textContent = ms(s.avg_last_ws_age_ms || 0);
+  document.getElementById('s-avg-entry-ws-age').textContent = ms(s.avg_entry_ws_age_ms || 0);
+  const clvEl = document.getElementById('s-avg-clv-bps');
+  clvEl.textContent = bps(s.avg_closed_clv_bps || 0);
+  clvEl.className = 'value ' + ((s.avg_closed_clv_bps || 0) >= 0 ? 'pos' : 'neg');
+  document.getElementById('s-cal-models').textContent = s.calibration_models_active ?? 0;
+  document.getElementById('s-cal-last').textContent = s.calibration_last_fit_at ? timeAgo(s.calibration_last_fit_at) : '–';
+
+  const tbody = document.getElementById('sport-quote-tbody');
+  const rows = Array.isArray(s.sport_quote_stats) ? s.sport_quote_stats : [];
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">No quote telemetry yet</td></tr>';
+  } else {
+    tbody.innerHTML = rows.map(r => `<tr>
+      <td>${r.sport}</td>
+      <td>${r.ws_marks}</td>
+      <td>${r.rest_fallback_marks}</td>
+      <td>${pct(r.rest_fallback_rate || 0)}</td>
+      <td>${ms(r.avg_ws_age_ms || 0)}</td>
+    </tr>`).join('');
+  }
+
+  const clvTbody = document.getElementById('sport-clv-tbody');
+  const clvRows = Array.isArray(s.sport_clv_stats) ? s.sport_clv_stats : [];
+  if (!clvRows.length) {
+    clvTbody.innerHTML = '<tr><td colspan="4" class="empty">No closed trades yet</td></tr>';
+  } else {
+    clvTbody.innerHTML = clvRows.map(r => `<tr>
+      <td>${r.sport}</td>
+      <td>${r.trades}</td>
+      <td class="${(r.avg_clv_bps || 0) >= 0 ? 'pos' : 'neg'}">${bps(r.avg_clv_bps || 0)}</td>
+      <td>${pct(r.win_rate || 0)}</td>
+    </tr>`).join('');
+  }
 }
 
 async function loadPositions() {
@@ -240,8 +303,8 @@ async function loadPositions() {
   tbody.innerHTML = positions.slice(0,20).map(p => {
     const pnl = p.pnl != null ? (p.pnl >= 0 ? '+' : '') + fmt.format(p.pnl) : '–';
     const pnlClass = p.pnl != null ? (p.pnl >= 0 ? 'pos' : 'neg') : '';
-    const statusClass = { open:'open', closed_profit:'profit', closed_stop_loss:'stoploss', closed_loss:'loss' }[p.status] || 'open';
-    const statusLabel = { open:'Open', closed_profit:'Profit', closed_stop_loss:'Stop Loss', closed_loss:'Loss' }[p.status] || p.status;
+    const statusClass = { open:'open', closed_profit:'profit', closed_stop_loss:'stoploss', closed_loss:'loss', closed_feed_health:'stoploss', closed_time_exit:'stoploss' }[p.status] || 'open';
+    const statusLabel = { open:'Open', closed_profit:'Profit', closed_stop_loss:'Stop Loss', closed_loss:'Loss', closed_feed_health:'Feed Flatten', closed_time_exit:'Time Exit' }[p.status] || p.status;
     const market = p.event_name || p.market_id.slice(0,12)+'…';
     return `<tr>
       <td title="${p.market_id}">${market}</td>

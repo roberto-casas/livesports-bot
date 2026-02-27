@@ -29,8 +29,8 @@ use tokio::sync::RwLock;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info, warn};
 
-use crate::db::models::{GameStatus, LiveGame};
 use super::provider::ScoreProvider;
+use crate::db::models::{GameStatus, LiveGame};
 
 /// A function that parses a raw WebSocket text message into zero or more `LiveGame`s.
 pub type ParseFn = Arc<dyn Fn(&str) -> Vec<LiveGame> + Send + Sync>;
@@ -231,7 +231,8 @@ pub fn parse_allsportsapi(text: &str) -> Vec<LiveGame> {
     events
         .iter()
         .filter_map(|ev| {
-            let event_key = ev.get("event_key")?
+            let event_key = ev
+                .get("event_key")?
                 .as_str()
                 .or_else(|| ev.get("event_key").and_then(|v| v.as_u64()).map(|_| ""))
                 .unwrap_or("");
@@ -270,11 +271,7 @@ pub fn parse_allsportsapi(text: &str) -> Vec<LiveGame> {
             let sport = classify_sport_from_league(&league_name);
 
             // Only include live events
-            let is_live = ev
-                .get("event_live")
-                .and_then(|v| v.as_str())
-                .unwrap_or("0")
-                == "1";
+            let is_live = ev.get("event_live").and_then(|v| v.as_str()).unwrap_or("0") == "1";
             if !is_live && status == GameStatus::NotStarted {
                 return None;
             }
@@ -331,10 +328,7 @@ pub fn parse_polymarket_sports(text: &str) -> Vec<LiveGame> {
             let score_str = ev.get("score").and_then(|v| v.as_str()).unwrap_or("");
             let (home_score, away_score) = parse_score_string(score_str);
 
-            let period = ev
-                .get("period")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let period = ev.get("period").and_then(|v| v.as_str()).unwrap_or("");
 
             // Extract team names from slug (format: "team1-vs-team2" or similar)
             let (home_team, away_team) = parse_teams_from_slug(slug);
@@ -544,13 +538,11 @@ pub fn parse_betsapi(text: &str) -> Vec<LiveGame> {
     results
         .iter()
         .filter_map(|ev| {
-            let event_id = ev
-                .get("id")
-                .and_then(|id| {
-                    id.as_str()
-                        .map(|s| s.to_string())
-                        .or_else(|| id.as_u64().map(|n| n.to_string()))
-                })?;
+            let event_id = ev.get("id").and_then(|id| {
+                id.as_str()
+                    .map(|s| s.to_string())
+                    .or_else(|| id.as_u64().map(|n| n.to_string()))
+            })?;
 
             let sport_id = ev.get("sport_id").and_then(|s| s.as_u64()).unwrap_or(1);
             let sport = match sport_id {
@@ -602,14 +594,11 @@ pub fn parse_betsapi(text: &str) -> Vec<LiveGame> {
                 _ => GameStatus::InProgress,
             };
 
-            let minute = ev
-                .get("timer")
-                .and_then(|t| t.get("tm"))
-                .and_then(|tm| {
-                    tm.as_str()
-                        .and_then(|s| s.parse().ok())
-                        .or_else(|| tm.as_i64().map(|v| v as i32))
-                });
+            let minute = ev.get("timer").and_then(|t| t.get("tm")).and_then(|tm| {
+                tm.as_str()
+                    .and_then(|s| s.parse().ok())
+                    .or_else(|| tm.as_i64().map(|v| v as i32))
+            });
 
             Some(LiveGame {
                 event_id: format!("betsapi_{}", event_id),
@@ -653,15 +642,15 @@ mod tests {
             parse_allsports_status("Half Time"),
             (GameStatus::HalfTime, None)
         );
-        assert_eq!(
-            parse_allsports_status(""),
-            (GameStatus::NotStarted, None)
-        );
+        assert_eq!(parse_allsports_status(""), (GameStatus::NotStarted, None));
     }
 
     #[test]
     fn test_classify_sport() {
-        assert_eq!(classify_sport_from_league("NBA - Regular Season"), "basketball");
+        assert_eq!(
+            classify_sport_from_league("NBA - Regular Season"),
+            "basketball"
+        );
         assert_eq!(classify_sport_from_league("NFL"), "american_football");
         assert_eq!(classify_sport_from_league("Premier League"), "soccer");
         assert_eq!(classify_sport_from_league("NHL"), "ice_hockey");

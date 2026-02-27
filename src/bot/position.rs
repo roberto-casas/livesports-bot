@@ -21,7 +21,9 @@ pub enum PositionAction {
 pub fn evaluate_position(pos: &Position, current_price: f64) -> PositionAction {
     let shares = pos.size_usd / pos.entry_price; // number of outcome tokens held
     let current_value = shares * current_price;
-    let pnl = current_value - pos.size_usd;
+    let gross_pnl = current_value - pos.size_usd;
+    let estimated_cost = pos.size_usd * (pos.estimated_round_trip_cost_bps / 10_000.0);
+    let pnl = gross_pnl - estimated_cost;
 
     if current_price >= pos.take_profit_price {
         PositionAction::TakeProfit {
@@ -71,10 +73,16 @@ mod tests {
         Position {
             id: None,
             market_id: "mkt1".into(),
+            asset_id: None,
             outcome: "YES".into(),
             side: "buy".into(),
             size_usd: 10.0,
             entry_price: entry,
+            entry_price_source: None,
+            entry_model_prob_raw: None,
+            entry_model_prob: None,
+            entry_ws_age_ms: None,
+            estimated_round_trip_cost_bps: 0.0,
             stop_loss_price: stop,
             take_profit_price: take,
             status: "open".into(),
@@ -83,6 +91,9 @@ mod tests {
             exit_price: None,
             pnl: None,
             dry_run: true,
+            ws_used_count: 0,
+            rest_fallback_count: 0,
+            last_ws_age_ms: None,
             sport: None,
             league: None,
             event_name: None,
@@ -127,6 +138,20 @@ mod tests {
     fn test_compute_levels_take_profit_capped() {
         let (_, take) = compute_levels(0.95, 0.5, 0.3);
         assert!(take <= 0.99);
+    }
+
+    #[test]
+    fn test_evaluate_position_accounts_for_estimated_cost() {
+        let mut pos = make_position(0.5, 0.3, 0.7);
+        pos.estimated_round_trip_cost_bps = 100.0; // 1%
+        let action = evaluate_position(&pos, 0.75);
+        match action {
+            PositionAction::TakeProfit { pnl, .. } => {
+                assert!(pnl < 5.0); // gross would be 5.0 on $10 at 0.5->0.75
+                assert!(pnl > 4.8);
+            }
+            other => panic!("Expected TakeProfit, got {:?}", other),
+        }
     }
 
     // Win probability tests are now in super::win_probability::tests

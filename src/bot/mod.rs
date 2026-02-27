@@ -1,3 +1,4 @@
+pub mod calibration;
 pub mod kelly;
 pub mod position;
 pub mod strategy;

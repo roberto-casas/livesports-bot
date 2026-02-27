@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use reqwest::Client;
 use tracing::debug;
 
-use crate::db::models::{GameStatus, LiveGame};
 use super::provider::ScoreProvider;
+use crate::db::models::{GameStatus, LiveGame};
 
 /// Live-score provider backed by TheSportsDB v2 free API.
 /// Docs: <https://www.thesportsdb.com/api.php>
@@ -55,14 +55,20 @@ impl ScoreProvider for TheSportsDB {
         let url = format!("{}/{}/livescore.php", self.base_url, self.api_key);
         debug!("Fetching live games from {}", url);
 
-        let resp = self.http.get(&url).send().await
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
             .context("TheSportsDB request failed")?;
 
         if !resp.status().is_success() {
             anyhow::bail!("TheSportsDB error: {}", resp.status());
         }
 
-        let raw: serde_json::Value = resp.json().await
+        let raw: serde_json::Value = resp
+            .json()
+            .await
             .context("Failed to parse TheSportsDB response")?;
 
         parse_livescore_response(&raw)
@@ -101,9 +107,7 @@ fn parse_livescore_response(raw: &serde_json::Value) -> Result<Vec<LiveGame>> {
                 .and_then(|s| s.parse().ok())
                 .or_else(|| ev["strProgress"].as_str().and_then(|s| s.parse().ok()));
 
-            let status_str = ev["strStatus"]
-                .as_str()
-                .unwrap_or("In Progress");
+            let status_str = ev["strStatus"].as_str().unwrap_or("In Progress");
             let status = TheSportsDB::status_from_str(status_str);
 
             Some(LiveGame {
@@ -149,36 +153,55 @@ fn classify_score_change(
 ) -> String {
     let home_delta = curr_home - prev_home;
     let away_delta = curr_away - prev_away;
+    let side = if home_delta > 0 && away_delta == 0 {
+        Some("home")
+    } else if away_delta > 0 && home_delta == 0 {
+        Some("away")
+    } else {
+        None
+    };
+
+    // Negative or simultaneous deltas are usually feed corrections / sync glitches.
+    if side.is_none() || home_delta < 0 || away_delta < 0 {
+        return "score_correction".to_string();
+    }
+
+    let delta = home_delta.max(away_delta).abs();
+    let side = side.unwrap_or("unknown");
 
     match sport {
         "soccer" | "football" => {
-            if home_delta > 0 { "goal_home".to_string() }
-            else if away_delta > 0 { "goal_away".to_string() }
-            else { "score_change".to_string() }
+            format!("goal_{}", side)
         }
         "american_football" | "nfl" => {
-            let delta = if home_delta != 0 { home_delta } else { away_delta };
-            match delta.abs() {
-                6 => "touchdown".to_string(),
-                3 => "field_goal".to_string(),
-                1 => "extra_point".to_string(),
-                2 => "safety".to_string(),
-                _ => "score_change".to_string(),
-            }
+            let base = match delta {
+                6 => "touchdown",
+                3 => "field_goal",
+                1 => "extra_point",
+                2 => "safety",
+                _ => "score_change",
+            };
+            format!("{}_{}", base, side)
         }
         "basketball" | "nba" => {
-            let delta = if home_delta != 0 { home_delta } else { away_delta };
-            match delta.abs() {
-                3 => "three_pointer".to_string(),
-                2 => "basket".to_string(),
-                1 => "free_throw".to_string(),
-                _ => "score_change".to_string(),
+            let base = match delta {
+                3 => "three_pointer",
+                2 => "basket",
+                1 => "free_throw",
+                _ => "score_change",
+            };
+            format!("{}_{}", base, side)
+        }
+        "baseball" | "mlb" => {
+            if delta > 1 {
+                format!("multi_run_{}", side)
+            } else {
+                format!("run_{}", side)
             }
         }
-        "baseball" | "mlb" => "run".to_string(),
-        "ice_hockey" | "nhl" => "goal".to_string(),
-        "tennis" => "point".to_string(),
-        _ => "score_change".to_string(),
+        "ice_hockey" | "nhl" => format!("goal_{}", side),
+        "tennis" => format!("point_{}", side),
+        _ => format!("score_change_{}", side),
     }
 }
 
@@ -226,13 +249,13 @@ mod tests {
     #[test]
     fn test_classify_nfl_touchdown() {
         let result = classify_score_change("nfl", 0, 0, 6, 0);
-        assert_eq!(result, "touchdown");
+        assert_eq!(result, "touchdown_home");
     }
 
     #[test]
     fn test_classify_nba_three_pointer() {
         let result = classify_score_change("basketball", 0, 0, 3, 0);
-        assert_eq!(result, "three_pointer");
+        assert_eq!(result, "three_pointer_home");
     }
 
     #[test]

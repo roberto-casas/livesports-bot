@@ -271,11 +271,11 @@ fn tennis_win_prob(game: &LiveGame) -> f64 {
     // Best-of-3 or best-of-5; assume best-of-3 for most matches
     // Each set difference is a massive advantage
     match diff as i32 {
-        d if d >= 2 => 0.97,  // Won 2-0 in best-of-3
-        1 => 0.72,            // Up a set
-        0 => 0.50,            // Level
-        -1 => 0.28,           // Down a set
-        _ => 0.03,            // Down 0-2
+        d if d >= 2 => 0.97, // Won 2-0 in best-of-3
+        1 => 0.72,           // Up a set
+        0 => 0.50,           // Level
+        -1 => 0.28,          // Down a set
+        _ => 0.03,           // Down 0-2
     }
 }
 
@@ -360,10 +360,14 @@ mod tests {
         ScoreEvent {
             id: None,
             event_id: "ev1".into(),
+            source_provider: None,
+            provider_consensus_count: None,
             sport: sport.into(),
             league: "test".into(),
             home_team: "Home".into(),
             away_team: "Away".into(),
+            prev_home_score: None,
+            prev_away_score: None,
             home_score: home,
             away_score: away,
             minute: Some(minute),
@@ -394,7 +398,11 @@ mod tests {
         let game = make_game("soccer", 0, 0, 45);
         let p = estimate_win_probability(&ev, &game, true);
         // Tied at HT: home win prob ≈ 38% (from table: 0.38)
-        assert!(p > 0.35 && p < 0.45, "Tied at HT should be ~38%, got {:.3}", p);
+        assert!(
+            p > 0.35 && p < 0.45,
+            "Tied at HT should be ~38%, got {:.3}",
+            p
+        );
     }
 
     #[test]
@@ -409,7 +417,11 @@ mod tests {
         // p_home + p_not_home = 1.0 by construction (for Polymarket binary markets)
         assert_relative_eq!(p_home + p_not_home, 1.0, epsilon = 1e-9);
         // When tied late, P(home wins) should be well below 50% (draws eat into it)
-        assert!(p_home < 0.35, "Tied at 75': P(home wins) should be <35%, got {:.3}", p_home);
+        assert!(
+            p_home < 0.35,
+            "Tied at 75': P(home wins) should be <35%, got {:.3}",
+            p_home
+        );
     }
 
     #[test]
@@ -422,7 +434,12 @@ mod tests {
         let p30 = estimate_win_probability(&ev30, &game30, true);
         let p80 = estimate_win_probability(&ev80, &game80, true);
 
-        assert!(p80 > p30, "1-0 at min 80 ({:.3}) should be > min 30 ({:.3})", p80, p30);
+        assert!(
+            p80 > p30,
+            "1-0 at min 80 ({:.3}) should be > min 30 ({:.3})",
+            p80,
+            p30
+        );
         // Empirical: ~70% at min 30, ~88% at min 80
         assert!(p30 > 0.65, "1-0 at min 30 should be >65%, got {:.3}", p30);
         assert!(p80 > 0.85, "1-0 at min 80 should be >85%, got {:.3}", p80);
@@ -438,7 +455,12 @@ mod tests {
         let p1 = estimate_win_probability(&ev1, &game1, true);
         let p2 = estimate_win_probability(&ev2, &game2, true);
 
-        assert!(p2 > p1 + 0.10, "2-0 ({:.3}) should be significantly > 1-0 ({:.3})", p2, p1);
+        assert!(
+            p2 > p1 + 0.10,
+            "2-0 ({:.3}) should be significantly > 1-0 ({:.3})",
+            p2,
+            p1
+        );
         assert!(p2 > 0.90, "2-0 at min 60 should be >90%, got {:.3}", p2);
     }
 
@@ -455,7 +477,11 @@ mod tests {
         let ev = make_event("soccer", 0, 2, 75);
         let game = make_game("soccer", 0, 2, 75);
         let p = estimate_win_probability(&ev, &game, true);
-        assert!(p < 0.05, "Home trailing 0-2 at 75' should be <5%, got {:.3}", p);
+        assert!(
+            p < 0.05,
+            "Home trailing 0-2 at 75' should be <5%, got {:.3}",
+            p
+        );
     }
 
     #[test]
@@ -476,7 +502,11 @@ mod tests {
         let ev = make_event("basketball", 15, 12, 8);
         let game = make_game("basketball", 15, 12, 8);
         let p = estimate_win_probability(&ev, &game, true);
-        assert!(p > 0.50 && p < 0.65, "3-pt lead in Q1 should be mild edge, got {:.3}", p);
+        assert!(
+            p > 0.50 && p < 0.65,
+            "3-pt lead in Q1 should be mild edge, got {:.3}",
+            p
+        );
     }
 
     #[test]
@@ -493,7 +523,11 @@ mod tests {
         let ev = make_event("basketball", 100, 90, 44);
         let game = make_game("basketball", 100, 90, 44);
         let p = estimate_win_probability(&ev, &game, true);
-        assert!(p > 0.90, "10-pt lead with 4 min left should be >90%, got {:.3}", p);
+        assert!(
+            p > 0.90,
+            "10-pt lead with 4 min left should be >90%, got {:.3}",
+            p
+        );
     }
 
     #[test]
@@ -512,7 +546,11 @@ mod tests {
         let ev = make_event("american_football", 14, 7, 30);
         let game = make_game("american_football", 14, 7, 30);
         let p = estimate_win_probability(&ev, &game, true);
-        assert!(p > 0.60 && p < 0.80, "7-pt lead at HT should be 60-80%, got {:.3}", p);
+        assert!(
+            p > 0.60 && p < 0.80,
+            "7-pt lead at HT should be 60-80%, got {:.3}",
+            p
+        );
     }
 
     #[test]
@@ -529,7 +567,11 @@ mod tests {
         let ev = make_event("american_football", 24, 17, 55);
         let game = make_game("american_football", 24, 17, 55);
         let p = estimate_win_probability(&ev, &game, true);
-        assert!(p > 0.85, "7-pt lead with 5 min left should be >85%, got {:.3}", p);
+        assert!(
+            p > 0.85,
+            "7-pt lead with 5 min left should be >85%, got {:.3}",
+            p
+        );
     }
 
     // ── Baseball Tests ───────────────────────────────────────────────────────
@@ -569,9 +611,18 @@ mod tests {
         let p1 = estimate_win_probability(&ev1, &game1, true);
         let p3 = estimate_win_probability(&ev3, &game3, true);
 
-        assert!(p3 > p1, "1-goal lead in 3rd period ({:.3}) > 1st ({:.3})", p3, p1);
+        assert!(
+            p3 > p1,
+            "1-goal lead in 3rd period ({:.3}) > 1st ({:.3})",
+            p3,
+            p1
+        );
         assert!(p1 > 0.60, "1-goal lead early should be >60%, got {:.3}", p1);
-        assert!(p3 > 0.80, "1-goal lead in 3rd should be >80%, got {:.3}", p3);
+        assert!(
+            p3 > 0.80,
+            "1-goal lead in 3rd should be >80%, got {:.3}",
+            p3
+        );
     }
 
     #[test]
@@ -599,7 +650,8 @@ mod tests {
         assert!(
             sp > bp,
             "Soccer 1-0 at 60' ({:.3}) should give higher prob than basketball 52-50 at HT ({:.3})",
-            sp, bp
+            sp,
+            bp
         );
     }
 
@@ -630,7 +682,14 @@ mod tests {
     #[test]
     fn all_models_return_valid_range() {
         // Every model should return values in [0.03, 0.97]
-        for sport in &["soccer", "basketball", "american_football", "baseball", "ice_hockey", "tennis"] {
+        for sport in &[
+            "soccer",
+            "basketball",
+            "american_football",
+            "baseball",
+            "ice_hockey",
+            "tennis",
+        ] {
             for home in 0..5 {
                 for away in 0..5 {
                     for minute in [1, 15, 30, 45, 60, 75, 85] {
@@ -640,7 +699,11 @@ mod tests {
                         assert!(
                             p >= 0.03 && p <= 0.97,
                             "Out of range for {}({}-{} @{}): {:.4}",
-                            sport, home, away, minute, p
+                            sport,
+                            home,
+                            away,
+                            minute,
+                            p
                         );
                     }
                 }

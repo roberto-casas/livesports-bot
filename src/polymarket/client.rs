@@ -15,11 +15,7 @@ pub struct PolymarketClient {
 }
 
 impl PolymarketClient {
-    pub fn new(
-        api_url: &str,
-        clob_url: &str,
-        api_key: Option<String>,
-    ) -> Result<Self> {
+    pub fn new(api_url: &str, clob_url: &str, api_key: Option<String>) -> Result<Self> {
         let http = Client::builder()
             .timeout(std::time::Duration::from_secs(3))
             .connect_timeout(std::time::Duration::from_secs(2))
@@ -65,7 +61,10 @@ impl PolymarketClient {
             anyhow::bail!("Polymarket API error {}: {}", status, body);
         }
 
-        let raw: serde_json::Value = resp.json().await.context("Failed to parse Polymarket response")?;
+        let raw: serde_json::Value = resp
+            .json()
+            .await
+            .context("Failed to parse Polymarket response")?;
 
         let markets = parse_markets(&raw, league)?;
         info!(
@@ -79,20 +78,26 @@ impl PolymarketClient {
 
     /// Get the current price (0.0–1.0) for an outcome token.
     pub async fn get_token_price(&self, market_id: &str, outcome: &str) -> Result<f64> {
-        let url = format!("{}/markets/{}", self.api_url, market_id);
-        let resp = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .context("Failed to fetch market price")?;
-
-        if !resp.status().is_success() {
-            anyhow::bail!("Polymarket price fetch error: {}", resp.status());
-        }
-
-        let raw: serde_json::Value = resp.json().await?;
+        let raw = self.fetch_market_raw(market_id).await?;
         extract_price(&raw, outcome)
+    }
+
+    /// Get both YES/NO prices for a market.
+    pub async fn get_market_prices(&self, market_id: &str) -> Result<(Option<f64>, Option<f64>)> {
+        let raw = self.fetch_market_raw(market_id).await?;
+        Ok(parse_token_prices(&raw))
+    }
+
+    /// Resolve token asset ID for a given market outcome ("YES"/"NO").
+    pub async fn get_market_asset_id(&self, market_id: &str, outcome: &str) -> Result<String> {
+        let raw = self.fetch_market_raw(market_id).await?;
+        extract_asset_id(&raw, outcome)
+    }
+
+    /// Return resolved market winner outcome ("YES"/"NO") if market is resolved.
+    pub async fn get_market_resolved_outcome(&self, market_id: &str) -> Result<Option<String>> {
+        let raw = self.fetch_market_raw(market_id).await?;
+        Ok(parse_resolved_outcome(&raw))
     }
 
     /// Place a market order on Polymarket CLOB.
@@ -136,10 +141,7 @@ impl PolymarketClient {
         }
 
         let result: serde_json::Value = resp.json().await?;
-        let order_id = result["orderId"]
-            .as_str()
-            .unwrap_or("unknown")
-            .to_string();
+        let order_id = result["orderId"].as_str().unwrap_or("unknown").to_string();
         info!("Order placed, id={}", order_id);
         Ok(order_id)
     }
@@ -188,7 +190,15 @@ impl PolymarketClient {
     /// Fetch all active sports markets from Polymarket (for background market discovery).
     /// All sport tags are fetched **concurrently** to minimise total latency.
     pub async fn fetch_sports_markets(&self) -> Result<Vec<Market>> {
-        let sports_tags = ["nfl", "nba", "soccer", "mls", "premier-league", "nhl", "mlb"];
+        let sports_tags = [
+            "nfl",
+            "nba",
+            "soccer",
+            "mls",
+            "premier-league",
+            "nhl",
+            "mlb",
+        ];
 
         let fetch_futures: Vec<_> = sports_tags
             .iter()
@@ -223,6 +233,23 @@ impl PolymarketClient {
         let all_markets: Vec<Market> = results.into_iter().flatten().collect();
         Ok(all_markets)
     }
+
+    async fn fetch_market_raw(&self, market_id: &str) -> Result<serde_json::Value> {
+        let url = format!("{}/markets/{}", self.api_url, market_id);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to fetch market price")?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("Polymarket price fetch error: {}", resp.status());
+        }
+
+        let raw: serde_json::Value = resp.json().await?;
+        Ok(raw)
+    }
 }
 
 // ── Parsing helpers ────────────────────────────────────────────────────────────
@@ -242,11 +269,13 @@ fn parse_markets(raw: &serde_json::Value, league_hint: &str) -> Result<Vec<Marke
     let markets: Vec<Market> = items
         .iter()
         .filter_map(|item| {
-            let id = item["conditionId"].as_str().or_else(|| item["id"].as_str())?;
+            let id = item["conditionId"]
+                .as_str()
+                .or_else(|| item["id"].as_str())?;
             let question = item["question"].as_str().unwrap_or("").to_string();
-            let volume = item["volume"].as_f64().or_else(|| {
-                item["volume"].as_str().and_then(|s| s.parse().ok())
-            });
+            let volume = item["volume"]
+                .as_f64()
+                .or_else(|| item["volume"].as_str().and_then(|s| s.parse().ok()));
             let status = if item["active"].as_bool().unwrap_or(false) {
                 "active"
             } else {
@@ -296,12 +325,95 @@ fn parse_token_prices(item: &serde_json::Value) -> (Option<f64>, Option<f64>) {
     // Fallback: outcomePrices field
     if let Some(prices) = item["outcomePrices"].as_array() {
         let yes_price = prices.first().and_then(|v| {
-            v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            v.as_f64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
         });
         let no_price = prices.get(1).and_then(|v| {
-            v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            v.as_f64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
         });
         return (yes_price, no_price);
+    }
+
+    (None, None)
+}
+
+fn parse_resolved_outcome(item: &serde_json::Value) -> Option<String> {
+    let normalize = |s: &str| match s.trim().to_lowercase().as_str() {
+        "yes" | "true" | "1" => Some("YES".to_string()),
+        "no" | "false" | "0" => Some("NO".to_string()),
+        _ => None,
+    };
+
+    // Common top-level resolution fields.
+    for key in [
+        "resolvedOutcome",
+        "resolved_outcome",
+        "winner",
+        "winningOutcome",
+        "outcome",
+        "result",
+    ] {
+        if let Some(outcome) = item.get(key).and_then(|v| v.as_str()).and_then(normalize) {
+            return Some(outcome);
+        }
+    }
+
+    // Token-level winner flag.
+    if let Some(tokens) = item.get("tokens").and_then(|v| v.as_array()) {
+        for token in tokens {
+            let is_winner = token
+                .get("winner")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+                || token
+                    .get("isWinner")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+            if is_winner {
+                if let Some(outcome) = token
+                    .get("outcome")
+                    .and_then(|v| v.as_str())
+                    .and_then(normalize)
+                {
+                    return Some(outcome);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn parse_token_asset_ids(item: &serde_json::Value) -> (Option<String>, Option<String>) {
+    // Preferred: tokens array with explicit outcome mapping.
+    if let Some(tokens) = item["tokens"].as_array() {
+        let mut yes_id = None;
+        let mut no_id = None;
+        for token in tokens {
+            let outcome = token["outcome"].as_str().unwrap_or("").to_lowercase();
+            let asset_id = parse_id_field(token, "asset_id")
+                .or_else(|| parse_id_field(token, "assetId"))
+                .or_else(|| parse_id_field(token, "token_id"))
+                .or_else(|| parse_id_field(token, "tokenId"))
+                .or_else(|| parse_id_field(token, "clobTokenId"));
+            if outcome == "yes" {
+                yes_id = asset_id;
+            } else if outcome == "no" {
+                no_id = asset_id;
+            }
+        }
+        if yes_id.is_some() || no_id.is_some() {
+            return (yes_id, no_id);
+        }
+    }
+
+    // Fallback: some payloads expose token IDs as a 2-element array aligned to
+    // outcomes [YES, NO].
+    if let Some(ids) = item["clobTokenIds"].as_array() {
+        let yes_id = ids.first().and_then(parse_id_value);
+        let no_id = ids.get(1).and_then(parse_id_value);
+        return (yes_id, no_id);
     }
 
     (None, None)
@@ -314,6 +426,31 @@ fn extract_price(raw: &serde_json::Value, outcome: &str) -> Result<f64> {
         "no" => no_price.context("NO price not found in market data"),
         _ => anyhow::bail!("Unknown outcome: {}", outcome),
     }
+}
+
+fn extract_asset_id(raw: &serde_json::Value, outcome: &str) -> Result<String> {
+    let (yes_id, no_id) = parse_token_asset_ids(raw);
+    match outcome.to_lowercase().as_str() {
+        "yes" => yes_id.context("YES asset id not found in market data"),
+        "no" => no_id.context("NO asset id not found in market data"),
+        _ => anyhow::bail!("Unknown outcome: {}", outcome),
+    }
+}
+
+fn parse_id_field(obj: &serde_json::Value, field: &str) -> Option<String> {
+    obj.get(field).and_then(parse_id_value)
+}
+
+fn parse_id_value(v: &serde_json::Value) -> Option<String> {
+    if let Some(s) = v.as_str() {
+        if !s.trim().is_empty() {
+            return Some(s.to_string());
+        }
+    }
+    if let Some(n) = v.as_u64() {
+        return Some(n.to_string());
+    }
+    None
 }
 
 // Expose a simple URL encoding without pulling in another dep
@@ -333,5 +470,27 @@ mod urlencoding {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_resolved_outcome;
+
+    #[test]
+    fn parse_resolved_outcome_from_top_level() {
+        let raw = serde_json::json!({ "resolvedOutcome": "Yes" });
+        assert_eq!(parse_resolved_outcome(&raw).as_deref(), Some("YES"));
+    }
+
+    #[test]
+    fn parse_resolved_outcome_from_tokens_winner_flag() {
+        let raw = serde_json::json!({
+            "tokens": [
+                { "outcome": "No", "winner": false },
+                { "outcome": "Yes", "winner": true }
+            ]
+        });
+        assert_eq!(parse_resolved_outcome(&raw).as_deref(), Some("YES"));
     }
 }

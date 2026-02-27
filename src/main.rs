@@ -16,9 +16,9 @@ use bot::BotEngine;
 use config::Config;
 use dashboard::AppState;
 use db::Database;
+use live_scores::ScoreProvider;
 use live_scores::{start_score_monitor, TheSportsDB};
 use polymarket::{MarketCache, PolymarketClient};
-use live_scores::ScoreProvider;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -125,7 +125,12 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         let mut rx = start_score_monitor(score_providers, poll_interval);
 
-        let mut engine = match BotEngine::new(bot_config.clone(), bot_db.clone(), bot_polymarket, bot_cache.clone()) {
+        let mut engine = match BotEngine::new(
+            bot_config.clone(),
+            bot_db.clone(),
+            bot_polymarket,
+            bot_cache.clone(),
+        ) {
             Ok(e) => e,
             Err(err) => {
                 error!("Failed to create bot engine: {}", err);
@@ -176,6 +181,9 @@ async fn main() -> Result<()> {
 
         // Main event loop: process score changes + position management sweep
         let mut position_sweep_interval = tokio::time::interval(Duration::from_secs(5));
+        let mut maintenance_interval = tokio::time::interval(Duration::from_secs(60 * 60));
+        let mut calibration_interval =
+            tokio::time::interval(Duration::from_secs(bot_config.calibration_interval_secs));
 
         loop {
             tokio::select! {
@@ -187,6 +195,23 @@ async fn main() -> Result<()> {
                 _ = position_sweep_interval.tick() => {
                     if let Err(e) = engine.manage_positions().await {
                         error!("Error managing positions: {}", e);
+                    }
+                }
+                _ = maintenance_interval.tick() => {
+                    match bot_db.prune_score_events(bot_config.score_events_retention_days) {
+                        Ok(n) if n > 0 => info!("Pruned {} old score events", n),
+                        Ok(_) => {}
+                        Err(e) => warn!("Failed to prune score events: {}", e),
+                    }
+                    match bot_db.prune_balance_history(bot_config.balance_history_retention_days) {
+                        Ok(n) if n > 0 => info!("Pruned {} old balance snapshots", n),
+                        Ok(_) => {}
+                        Err(e) => warn!("Failed to prune balance history: {}", e),
+                    }
+                }
+                _ = calibration_interval.tick() => {
+                    if let Err(e) = engine.retrain_probability_calibration().await {
+                        warn!("Calibration retraining failed: {}", e);
                     }
                 }
             }

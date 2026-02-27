@@ -13,6 +13,7 @@
 
 #![allow(dead_code)]
 
+use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -75,6 +76,27 @@ impl PriceFeed {
             .await;
     }
 
+    /// Unsubscribe from price updates for the given asset IDs and evict their
+    /// latest snapshots from local memory.
+    pub async fn unsubscribe(&self, asset_ids: &[&str]) {
+        let ids: Vec<String> = asset_ids.iter().map(|s| s.to_string()).collect();
+        if ids.is_empty() {
+            return;
+        }
+
+        {
+            let mut prices = self.prices.write().await;
+            for id in &ids {
+                prices.remove(id);
+            }
+        }
+
+        let _ = self
+            .subscribe_tx
+            .send(SubscriptionRequest::Unsubscribe(ids))
+            .await;
+    }
+
     /// Get the latest price for an asset. Returns `None` if we haven't received
     /// any data for this asset yet.
     pub async fn get_price(&self, asset_id: &str) -> Option<PriceSnapshot> {
@@ -122,8 +144,7 @@ async fn price_ws_loop(
                     );
                 }
 
-                let mut ping_interval =
-                    tokio::time::interval(std::time::Duration::from_secs(25));
+                let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(25));
 
                 loop {
                     tokio::select! {
@@ -214,19 +235,21 @@ fn build_unsubscribe_message(asset_ids: &[String]) -> String {
 /// - `price_change`: individual price level updates with best_bid/best_ask
 /// - `best_bid_ask`: direct best bid/ask update
 /// - `book`: full orderbook snapshot
-async fn parse_and_update_prices(
-    text: &str,
-    prices: &Arc<RwLock<HashMap<String, PriceSnapshot>>>,
-) {
+async fn parse_and_update_prices(text: &str, prices: &Arc<RwLock<HashMap<String, PriceSnapshot>>>) {
     let Ok(val) = serde_json::from_str::<serde_json::Value>(text) else {
         return;
     };
 
     let event_type = val.get("event_type").and_then(|v| v.as_str()).unwrap_or("");
-    let timestamp = val
+    let timestamp_raw = val
         .get("timestamp")
-        .and_then(|v| v.as_str().and_then(|s| s.parse::<u64>().ok()).or_else(|| v.as_u64()))
+        .and_then(|v| {
+            v.as_str()
+                .and_then(|s| s.parse::<u64>().ok())
+                .or_else(|| v.as_u64())
+        })
         .unwrap_or(0);
+    let timestamp = normalize_timestamp_ms(timestamp_raw);
 
     match event_type {
         "price_change" => {
@@ -336,4 +359,20 @@ fn parse_price_field_from_val(val: &serde_json::Value, field: &str) -> Option<f6
         v.as_f64()
             .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
     })
+}
+
+fn normalize_timestamp_ms(ts: u64) -> u64 {
+    if ts == 0 {
+        return Utc::now().timestamp_millis().max(0) as u64;
+    }
+    // WS feeds may emit seconds/us/ms/ns depending on source; normalize to ms.
+    if ts > 10_000_000_000_000_000 {
+        ts / 1_000_000 // ns -> ms
+    } else if ts > 10_000_000_000_000 {
+        ts / 1_000 // us -> ms
+    } else if ts < 1_000_000_000_000 {
+        ts * 1_000 // s -> ms
+    } else {
+        ts // already ms
+    }
 }

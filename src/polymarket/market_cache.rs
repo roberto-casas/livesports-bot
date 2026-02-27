@@ -45,6 +45,8 @@ impl MarketCache {
     /// Called by the background discovery task.
     pub async fn load(&self, markets: Vec<Market>) {
         let mut inner = self.inner.write().await;
+        inner.markets.clear();
+        inner.token_index.clear();
 
         for market in markets {
             // Index by tokens from the question and event_name
@@ -73,12 +75,7 @@ impl MarketCache {
     /// ("Man United" matching "Manchester United") through token overlap.
     ///
     /// Returns markets sorted by volume (highest first).
-    pub async fn search(
-        &self,
-        home_team: &str,
-        away_team: &str,
-        _league: &str,
-    ) -> Vec<Market> {
+    pub async fn search(&self, home_team: &str, away_team: &str, _league: &str) -> Vec<Market> {
         let inner = self.inner.read().await;
         if inner.markets.is_empty() {
             return vec![];
