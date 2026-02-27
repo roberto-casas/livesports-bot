@@ -57,6 +57,10 @@ impl Database {
             "INTEGER NOT NULL DEFAULT 0",
         )?;
         ensure_column(&conn, "positions", "last_ws_age_ms", "INTEGER")?;
+        ensure_column(&conn, "markets", "slug", "TEXT")?;
+        ensure_column(&conn, "markets", "end_date", "TEXT")?;
+        ensure_column(&conn, "markets", "liquidity", "REAL")?;
+        ensure_column(&conn, "positions", "market_slug", "TEXT")?;
         Ok(())
     }
 
