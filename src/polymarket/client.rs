@@ -296,6 +296,13 @@ fn parse_markets(raw: &serde_json::Value, league_hint: &str) -> Result<Vec<Marke
                 volume,
                 status: status.to_string(),
                 fetched_at: Utc::now(),
+                slug: item["slug"].as_str().map(str::to_string),
+                end_date: item["endDate"]
+                    .as_str()
+                    .and_then(|s| s.parse::<chrono::DateTime<chrono::Utc>>().ok()),
+                liquidity: item["liquidity"]
+                    .as_f64()
+                    .or_else(|| item["liquidity"].as_str().and_then(|s| s.parse().ok())),
             })
         })
         .collect();
@@ -476,6 +483,29 @@ mod urlencoding {
 #[cfg(test)]
 mod tests {
     use super::parse_resolved_outcome;
+
+    #[test]
+    fn parse_markets_extracts_slug_end_date_liquidity() {
+        let raw = serde_json::json!([{
+            "conditionId": "abc123",
+            "question": "Will Arsenal win?",
+            "active": true,
+            "slug": "will-arsenal-win",
+            "endDate": "2025-06-01T00:00:00Z",
+            "liquidity": 12345.67,
+            "volume": "50000",
+            "tokens": [
+                {"outcome": "Yes", "price": "0.65"},
+                {"outcome": "No",  "price": "0.35"}
+            ]
+        }]);
+        let markets = super::parse_markets(&raw, "soccer").unwrap();
+        assert_eq!(markets.len(), 1);
+        let m = &markets[0];
+        assert_eq!(m.slug.as_deref(), Some("will-arsenal-win"));
+        assert!(m.end_date.is_some());
+        assert_eq!(m.liquidity, Some(12345.67));
+    }
 
     #[test]
     fn parse_resolved_outcome_from_top_level() {
