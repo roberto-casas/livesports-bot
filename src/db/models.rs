@@ -71,6 +71,7 @@ pub struct Position {
     pub sport: Option<String>,
     pub league: Option<String>,
     pub event_name: Option<String>,
+    pub market_slug: Option<String>,
 }
 
 /// A detected live score change event
