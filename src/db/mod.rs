@@ -119,8 +119,8 @@ impl Database {
                 entry_ws_age_ms, estimated_round_trip_cost_bps,
                 stop_loss_price, take_profit_price, status,
                 opened_at, dry_run, ws_used_count, rest_fallback_count, last_ws_age_ms,
-                sport, league, event_name
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)",
+                sport, league, event_name, market_slug
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)",
             params![
                 pos.market_id,
                 pos.asset_id,
@@ -144,6 +144,7 @@ impl Database {
                 pos.sport,
                 pos.league,
                 pos.event_name,
+                pos.market_slug,
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -194,7 +195,7 @@ impl Database {
                     stop_loss_price, take_profit_price, status,
                     opened_at, closed_at, exit_price, pnl, dry_run,
                     ws_used_count, rest_fallback_count, last_ws_age_ms,
-                    sport, league, event_name
+                    sport, league, event_name, market_slug
              FROM positions WHERE status='open' ORDER BY opened_at DESC",
         )?;
         let positions = stmt
@@ -213,7 +214,7 @@ impl Database {
                     stop_loss_price, take_profit_price, status,
                     opened_at, closed_at, exit_price, pnl, dry_run,
                     ws_used_count, rest_fallback_count, last_ws_age_ms,
-                    sport, league, event_name
+                    sport, league, event_name, market_slug
              FROM positions ORDER BY opened_at DESC LIMIT ?1 OFFSET ?2",
         )?;
         let positions = stmt
@@ -242,12 +243,14 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO markets (id, question, sport, league, event_name,
-                                  yes_price, no_price, volume, status, fetched_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
+                                  yes_price, no_price, volume, status, fetched_at,
+                                  slug, end_date, liquidity)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
              ON CONFLICT(id) DO UPDATE SET
                 yes_price=excluded.yes_price,
                 no_price=excluded.no_price,
                 volume=excluded.volume,
+                liquidity=excluded.liquidity,
                 status=excluded.status,
                 fetched_at=excluded.fetched_at",
             params![
@@ -261,6 +264,9 @@ impl Database {
                 market.volume,
                 market.status,
                 market.fetched_at,
+                market.slug,
+                market.end_date,
+                market.liquidity,
             ],
         )?;
         Ok(())
@@ -271,7 +277,8 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, question, sport, league, event_name,
-                    yes_price, no_price, volume, status, fetched_at
+                    yes_price, no_price, volume, status, fetched_at,
+                    slug, end_date, liquidity
              FROM markets WHERE status='active' ORDER BY volume DESC LIMIT 100",
         )?;
         let markets = stmt
@@ -652,6 +659,7 @@ fn map_position(row: &rusqlite::Row) -> rusqlite::Result<Position> {
         sport: row.get(23)?,
         league: row.get(24)?,
         event_name: row.get(25)?,
+        market_slug: row.get(26)?,
     })
 }
 
@@ -667,6 +675,9 @@ fn map_market(row: &rusqlite::Row) -> rusqlite::Result<Market> {
         volume: row.get(7)?,
         status: row.get(8)?,
         fetched_at: row.get(9)?,
+        slug: row.get(10)?,
+        end_date: row.get(11)?,
+        liquidity: row.get(12)?,
     })
 }
 
